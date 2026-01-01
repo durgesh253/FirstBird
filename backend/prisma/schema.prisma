@@ -1,0 +1,216 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Shop {
+  id              Int      @id @default(autoincrement())
+  shopifyDomain   String   @unique
+  accessToken     String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  orders          Order[]
+  coupons         Coupon[]
+  campaigns       Campaign[]
+  csvUploads      CSVUpload[]
+}
+
+model Order {
+  id              Int       @id @default(autoincrement())
+  shopifyOrderId  String    @unique
+  shopId          Int
+  shop            Shop      @relation(fields: [shopId], references: [id])
+  customerEmail   String?
+  customerName    String?
+  customerPhone   String?
+  totalAmount     Decimal
+  couponCode      String?
+  financialStatus String?   // e.g. paid, pending, cancelled
+  platformSource  String?   // e.g. Instagram, WhatsApp
+  lineItems       String?   // Comma-separated product names
+  campaignId      Int?
+  campaign        Campaign? @relation(fields: [campaignId], references: [id])
+  createdAt       DateTime  @default(now())
+  shopifyCreatedAt DateTime
+
+  @@index([couponCode])
+  @@index([shopifyCreatedAt])
+}
+
+model Coupon {
+  id              Int       @id @default(autoincrement())
+  code            String
+  shopId          Int
+  shop            Shop      @relation(fields: [shopId], references: [id])
+  status          String    @default("ACTIVE")
+  campaignId      Int?      @unique
+  campaign        Campaign? @relation(fields: [campaignId], references: [id])
+  createdAt       DateTime  @default(now())
+
+  @@unique([shopId, code])
+}
+
+model Campaign {
+  id              Int       @id @default(autoincrement())
+  name            String
+  platformSource  String
+  status          String    @default("Active")
+  shopId          Int?
+  shop            Shop?     @relation(fields: [shopId], references: [id])
+  coupon          Coupon?
+  orders          Order[]
+  leads           Lead[]
+  createdAt       DateTime  @default(now())
+}
+
+model Lead {
+  id              Int       @id @default(autoincrement())
+  name            String?
+  email           String?
+  phone           String?
+  campaignId      Int
+  campaign        Campaign  @relation(fields: [campaignId], references: [id])
+  platformSource  String
+  status          String    @default("PENDING") // PENDING, CONVERTED, LOST
+  uploadedAt      DateTime  @default(now())
+  
+  @@unique([campaignId, email])
+}
+
+model CSVUpload {
+  id              Int       @id @default(autoincrement())
+  shopId          Int?
+  shop            Shop?     @relation(fields: [shopId], references: [id])
+  fileName        String
+  fileSize        Int
+  totalRows       Int
+  status          String    @default("PROCESSING") // PROCESSING, SUCCESS, FAILED
+  errorMessage    String?
+  uploadedAt      DateTime  @default(now())
+  processedAt     DateTime?
+  analysisRecords CustomerAnalysis[]
+  orderRecords    CSVOrderRecord[]
+}
+
+// Global Customer table - tracks customers across ALL uploads
+// Phone number is the unique identifier
+model Customer {
+  id                  Int       @id @default(autoincrement())
+  phone               String    @unique  // Normalized phone (primary key)
+  name                String?             // From Billing Name (latest)
+  city                String?             // From Shipping City (latest)
+  totalOrders         Int       @default(0)
+  isRepeatCustomer    Boolean   @default(false)
+  lastProductOrdered  String?             // Latest LineItem Name
+  lastOrderDate       DateTime?
+  firstOrderDate      DateTime?
+  totalSpent          Decimal   @default(0)
+  productsBought      String?             // JSON array of all products
+  allCities           String?             // JSON array of all cities
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  orderRecords        CSVOrderRecord[]
+  
+  @@index([phone])
+  @@index([isRepeatCustomer])
+}
+
+// Per-upload analysis (kept for backwards compatibility)
+model CustomerAnalysis {
+  id              Int       @id @default(autoincrement())
+  uploadId        Int
+  upload          CSVUpload @relation(fields: [uploadId], references: [id], onDelete: Cascade)
+  customerPhone   String
+  customerName    String?
+  location        String?
+  totalOrders     Int
+  customerType    String    // "New" or "Repeat"
+  productsBought  String    // JSON stringified array
+  orderIds        String    // JSON stringified array
+  locations       String?
+  firstOrderDate  DateTime
+  lastOrderDate   DateTime
+  totalSpent      Decimal
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@unique([uploadId, customerPhone])
+  @@index([uploadId])
+  @@index([customerPhone])
+}
+
+model CSVOrderRecord {
+  id              Int       @id @default(autoincrement())
+  uploadId        Int
+  upload          CSVUpload @relation(fields: [uploadId], references: [id], onDelete: Cascade)
+  orderId         String
+  customerPhone   String
+  customerId      Int?                // Reference to global Customer
+  customer        Customer? @relation(fields: [customerId], references: [id])
+  customerName    String?             // From Billing Name
+  productName     String              // From LineItem Name
+  city            String?             // From Shipping City
+  orderDate       DateTime
+  orderAmount     Decimal
+  rawData         String
+  createdAt       DateTime  @default(now())
+
+  @@unique([uploadId, orderId, productName])  // Prevent duplicates
+  @@index([uploadId])
+  @@index([customerPhone])
+  @@index([customerId])
+}
+
+// ============================================
+// SUBSCRIPTION SYSTEM - Auto-created from Products
+// ============================================
+
+// Product-based Subscription Plan
+// Each unique product automatically becomes a subscription
+model Subscription {
+  id                  Int       @id @default(autoincrement())
+  productId           String?             // External product ID if available
+  productName         String    @unique   // LineItem Name - unique identifier
+  productNameLower    String    @unique   // Lowercase for case-insensitive matching
+  price               Decimal             // Auto from product/order
+  currency            String    @default("INR")
+  billingInterval     String    @default("monthly")  // monthly, yearly, weekly
+  isActive            Boolean   @default(true)
+  totalSubscribers    Int       @default(0)
+  totalRevenue        Decimal   @default(0)
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  customerSubscriptions CustomerSubscription[]
+  
+  @@index([productName])
+  @@index([isActive])
+}
+
+// Customer's active subscription to a product
+model CustomerSubscription {
+  id                  Int       @id @default(autoincrement())
+  customerPhone       String              // Links to Customer by phone
+  subscriptionId      Int
+  subscription        Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  productName         String              // Denormalized for display
+  price               Decimal             // Price snapshot at subscription time
+  currency            String    @default("INR")
+  status              String    @default("active")  // active, paused, cancelled, expired
+  startDate           DateTime  @default(now())
+  nextBillingDate     DateTime?
+  lastBillingDate     DateTime?
+  totalOrdersOnPlan   Int       @default(1)   // Orders for this specific product
+  totalSpentOnPlan    Decimal   @default(0)
+  cancelledAt         DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  
+  @@unique([customerPhone, subscriptionId])  // One subscription per product per customer
+  @@index([customerPhone])
+  @@index([subscriptionId])
+  @@index([status])
+}
