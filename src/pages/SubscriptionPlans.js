@@ -4,7 +4,7 @@ export function SubscriptionPlans() {
     const container = document.createElement('div');
     container.className = 'subscriptions-page';
 
-    const API_BASE = (location.hostname === 'localhost' && location.port === '5173') ? 'http://localhost:3000' : '';
+    const API_BASE = (location.hostname === 'localhost') ? 'http://localhost:3000' : '';
 
     // Styles
     const styles = document.createElement('style');
@@ -306,11 +306,29 @@ export function SubscriptionPlans() {
             font-weight: 600;
             cursor: pointer;
             transition: all 0.3s ease;
+            margin-right: 0.5rem;
         }
 
         .btn-view:hover {
             transform: translateY(-2px);
             box-shadow: 0 4px 15px rgba(16, 185, 129, 0.4);
+        }
+
+        .btn-delete {
+            background: linear-gradient(135deg, #ef4444, #dc2626);
+            color: white;
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 8px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .btn-delete:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(239, 68, 68, 0.4);
         }
 
         .modal-overlay {
@@ -672,6 +690,9 @@ export function SubscriptionPlans() {
                                             <button class="btn-view" data-product="${encodeURIComponent(s.productName)}">
                                                 <i class="ph ph-eye"></i> View
                                             </button>
+                                            <button class="btn-delete" data-product="${encodeURIComponent(s.productName)}" data-id="${s.id}">
+                                                <i class="ph ph-trash"></i> Delete
+                                            </button>
                                         </td>
                                     </tr>
                                 `).join('')}
@@ -697,6 +718,39 @@ export function SubscriptionPlans() {
             productsSection.querySelectorAll('.btn-view').forEach(btn => {
                 btn.addEventListener('click', () => {
                     showProductDetail(decodeURIComponent(btn.getAttribute('data-product')));
+                });
+            });
+
+            productsSection.querySelectorAll('.btn-delete').forEach(btn => {
+                btn.addEventListener('click', async () => {
+                    const productName = decodeURIComponent(btn.getAttribute('data-product'));
+                    const subscriptionId = btn.getAttribute('data-id');
+
+                    if (!confirm(`Are you sure you want to delete the subscription for "${productName}"?\n\nThis will remove the subscription plan and all associated customer subscriptions.`)) {
+                        return;
+                    }
+
+                    try {
+                        btn.disabled = true;
+                        btn.innerHTML = '<i class="ph ph-spinner" style="animation: spin 1s linear infinite;"></i> Deleting...';
+
+                        const resp = await fetch(`${API_BASE}/api/subscriptions/${subscriptionId}`, {
+                            method: 'DELETE'
+                        });
+
+                        if (!resp.ok) {
+                            const error = await resp.json();
+                            throw new Error(error.error || 'Failed to delete subscription');
+                        }
+
+                        const result = await resp.json();
+                        alert(`✅ ${result.message}`);
+                        loadProductSubscriptions();
+                    } catch (err) {
+                        alert('❌ Error: ' + err.message);
+                        btn.disabled = false;
+                        btn.innerHTML = '<i class="ph ph-trash"></i> Delete';
+                    }
                 });
             });
 

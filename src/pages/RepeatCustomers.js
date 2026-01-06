@@ -4,7 +4,7 @@ export function RepeatCustomers() {
     const container = document.createElement('div');
     container.className = 'repeat-customers-page';
 
-    const API_BASE = (location.hostname === 'localhost' && location.port === '5173') ? 'http://localhost:3000' : '';
+    const API_BASE = (location.hostname === 'localhost') ? 'http://localhost:3000' : '';
 
     // Styles
     const styles = document.createElement('style');
@@ -475,11 +475,104 @@ export function RepeatCustomers() {
             from { transform: rotate(0deg); }
             to { transform: rotate(360deg); }
         }
+
+        .greeting-banner {
+            background: linear-gradient(135deg, #ec4899, #db2777);
+            color: white;
+            padding: 1rem 1.5rem;
+            border-radius: 12px;
+            margin-bottom: 1.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            font-weight: 600;
+            box-shadow: 0 4px 15px rgba(236, 72, 153, 0.3);
+            animation: fadeIn 0.3s ease;
+        }
+
+        .greeting-banner i {
+            font-size: 1.5rem;
+        }
+
+        .upload-filter-banner {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            padding: 1rem 1.5rem;
+            border-radius: 12px;
+            margin-bottom: 1.5rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+            animation: fadeIn 0.3s ease;
+        }
+
+        .upload-filter-info {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            font-weight: 600;
+        }
+
+        .upload-filter-info i {
+            font-size: 1.5rem;
+        }
+
+        .btn-clear-filter {
+            background: rgba(255, 255, 255, 0.2);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            color: white;
+            padding: 0.5rem 1rem;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .btn-clear-filter:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+        .btn-delete {
+            background: #ef4444;
+            color: white;
+            border: none;
+            padding: 0.5rem 0.75rem;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+        }
+
+        .btn-delete:hover {
+            background: #dc2626;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(239, 68, 68, 0.4);
+        }
+
+        .upload-row {
+            cursor: pointer;
+            transition: background 0.2s ease;
+        }
+
+        .upload-row:hover {
+            background: #f8fafc !important;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
     `;
     container.appendChild(styles);
 
     // State
     let currentTab = 'customers';
+    let activeUploadFilter = null; // Track if viewing specific upload
     let filters = {
         repeatOnly: false,
         searchPhone: '',
@@ -564,19 +657,85 @@ export function RepeatCustomers() {
 
         try {
             const stats = await loadStats();
-            const queryParams = new URLSearchParams({
-                repeatOnly: filters.repeatOnly.toString(),
-                searchPhone: filters.searchPhone,
-                searchName: filters.searchName,
-                searchCity: filters.searchCity,
-                sortBy: filters.sortBy,
-                sortOrder: 'desc'
-            });
+            let customers;
 
-            const resp = await fetch(`${API_BASE}/api/customers/all?${queryParams}`);
-            const { customers } = await resp.json();
+            // Check if we're viewing a specific upload
+            if (activeUploadFilter) {
+                // Load customers from specific upload
+                const queryParams = new URLSearchParams({
+                    customerType: filters.repeatOnly ? 'Repeat' : '',
+                    searchPhone: filters.searchPhone,
+                    sortBy: filters.sortBy === 'totalOrders' ? 'total_orders' : filters.sortBy,
+                    sortOrder: 'desc'
+                });
 
-            customersSection.innerHTML = `
+                const resp = await fetch(`${API_BASE}/api/customers/analysis/${activeUploadFilter.id}?${queryParams}`);
+                const data = await resp.json();
+                customers = data.customers.map(c => ({
+                    name: c.customerName,
+                    phone: c.customerPhone,
+                    city: c.location || '—',
+                    totalOrders: c.globalTotalOrders || c.totalOrders,
+                    isRepeatCustomer: c.isRepeatCustomer,
+                    lastProductOrdered: c.productsBought?.[c.productsBought.length - 1] || '—',
+                    lastOrderDate: c.lastOrderDate,
+                    totalSpent: c.globalTotalSpent || c.totalSpent
+                }));
+
+                // Apply name and city filters client-side
+                if (filters.searchName) {
+                    customers = customers.filter(c => c.name?.toLowerCase().includes(filters.searchName.toLowerCase()));
+                }
+                if (filters.searchCity) {
+                    customers = customers.filter(c => c.city?.toLowerCase().includes(filters.searchCity.toLowerCase()));
+                }
+            } else {
+                // Load from global customer table
+                const queryParams = new URLSearchParams({
+                    repeatOnly: filters.repeatOnly.toString(),
+                    searchPhone: filters.searchPhone,
+                    searchName: filters.searchName,
+                    searchCity: filters.searchCity,
+                    sortBy: filters.sortBy,
+                    sortOrder: 'desc'
+                });
+
+                const resp = await fetch(`${API_BASE}/api/customers/all?${queryParams}`);
+                const data = await resp.json();
+                customers = data.customers;
+            }
+
+            let htmlContent = '';
+
+            // Add upload filter banner if active
+            if (activeUploadFilter) {
+                htmlContent += `
+                    <div class="upload-filter-banner">
+                        <div class="upload-filter-info">
+                            <i class="ph ph-funnel"></i>
+                            <div>
+                                <div>Viewing data from: <strong>${activeUploadFilter.fileName}</strong></div>
+                                <div style="font-size: 0.85rem; opacity: 0.9;">Uploaded on ${new Date(activeUploadFilter.uploadedAt).toLocaleString()}</div>
+                            </div>
+                        </div>
+                        <button id="clearUploadFilterBtn" class="btn-clear-filter">
+                            <i class="ph ph-x"></i> Back to All Customers
+                        </button>
+                    </div>
+                `;
+            }
+
+            // Add greeting banner for repeat customers
+            if (filters.repeatOnly && customers.length > 0) {
+                htmlContent += `
+                    <div class="greeting-banner">
+                        <i class="ph ph-hand-waving"></i>
+                        <span>Greeting ${customers.length} repeat customer${customers.length !== 1 ? 's' : ''}! 🎉</span>
+                    </div>
+                `;
+            }
+
+            htmlContent += `
                 <!-- Stats Cards -->
                 <div class="glass-card">
                     <div class="stats-grid">
@@ -646,7 +805,7 @@ export function RepeatCustomers() {
                         <div class="filter-buttons">
                             <button id="applyFiltersBtn" class="btn-primary"><i class="ph ph-funnel-simple"></i> Apply Filters</button>
                             <button id="clearFiltersBtn" class="btn-secondary"><i class="ph ph-x"></i> Clear</button>
-                            <button id="exportBtn" class="btn-secondary"><i class="ph ph-download-simple"></i> Export</button>
+                            <button id="downloadBtn" class="btn-secondary"><i class="ph ph-download-simple"></i> Download CSV</button>
                         </div>
                     </div>
                 </div>
@@ -665,7 +824,7 @@ export function RepeatCustomers() {
                                     <th>City</th>
                                     <th>Total Orders</th>
                                     <th>Repeat Customer</th>
-                                    <th>Last Product Ordered</th>
+                                    <th>All Products Purchased</th>
                                     <th>Last Order Date</th>
                                     <th>Actions</th>
                                 </tr>
@@ -689,7 +848,17 @@ export function RepeatCustomers() {
                                                 ${c.isRepeatCustomer ? '🔄 Yes' : '✨ No'}
                                             </span>
                                         </td>
-                                        <td>${c.lastProductOrdered || '—'}</td>
+                                        <td>${(() => {
+                    try {
+                        const products = Array.isArray(c.productsBought) ? c.productsBought : [];
+                        if (products && products.length > 0) {
+                            return products.join(' | ');
+                        }
+                    } catch (e) {
+                        console.error('Error displaying products:', e);
+                    }
+                    return 'N/A';
+                })()}</td>
                                         <td>${c.lastOrderDate ? new Date(c.lastOrderDate).toLocaleDateString() : '—'}</td>
                                         <td>
                                             <button class="btn-details" data-phone="${c.phone}">
@@ -704,6 +873,8 @@ export function RepeatCustomers() {
                 </div>
             `;
 
+            customersSection.innerHTML = htmlContent;
+
             // Attach event listeners
             customersSection.querySelector('#applyFiltersBtn')?.addEventListener('click', () => {
                 filters.repeatOnly = customersSection.querySelector('#filterRepeatOnly').value === 'true';
@@ -716,6 +887,37 @@ export function RepeatCustomers() {
 
             customersSection.querySelector('#clearFiltersBtn')?.addEventListener('click', () => {
                 filters = { repeatOnly: false, searchPhone: '', searchName: '', searchCity: '', sortBy: 'totalOrders' };
+                loadCustomerTable();
+            });
+
+            // Download CSV button
+            customersSection.querySelector('#downloadBtn')?.addEventListener('click', async () => {
+                try {
+                    const queryParams = new URLSearchParams({
+                        repeatOnly: filters.repeatOnly.toString(),
+                        searchPhone: filters.searchPhone,
+                        searchName: filters.searchName,
+                        searchCity: filters.searchCity,
+                        sortBy: filters.sortBy,
+                        sortOrder: 'desc',
+                        format: 'csv'
+                    });
+
+                    // Add uploadId if viewing specific upload
+                    if (activeUploadFilter) {
+                        queryParams.append('uploadId', activeUploadFilter.id);
+                    }
+
+                    // Trigger download
+                    window.location.href = `${API_BASE}/api/customers/export-filtered?${queryParams}`;
+                } catch (err) {
+                    alert('Error downloading data: ' + err.message);
+                }
+            });
+
+            // Clear upload filter button
+            customersSection.querySelector('#clearUploadFilterBtn')?.addEventListener('click', () => {
+                activeUploadFilter = null;
                 loadCustomerTable();
             });
 
@@ -857,17 +1059,18 @@ export function RepeatCustomers() {
                                     <th>Total Rows</th>
                                     <th>Customers</th>
                                     <th>Uploaded</th>
+                                    <th>Actions</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 ${uploads.length === 0 ? `
                                     <tr>
-                                        <td colspan="6" class="empty-state">
+                                        <td colspan="7" class="empty-state">
                                             <p>No uploads yet. Upload a CSV to get started.</p>
                                         </td>
                                     </tr>
                                 ` : uploads.map(u => `
-                                    <tr>
+                                    <tr class="upload-row" data-upload-id="${u.id}" data-upload-filename="${u.fileName}" data-upload-date="${u.uploadedAt}">
                                         <td><strong>#${u.id}</strong></td>
                                         <td>${u.fileName}</td>
                                         <td>
@@ -878,6 +1081,11 @@ export function RepeatCustomers() {
                                         <td>${u.totalRows || '—'}</td>
                                         <td>${u.customerCount || 0}</td>
                                         <td>${new Date(u.uploadedAt).toLocaleString()}</td>
+                                        <td>
+                                            <button class="btn-delete" data-upload-id="${u.id}" data-upload-filename="${u.fileName}" onclick="event.stopPropagation();">
+                                                <i class="ph ph-trash"></i> Delete
+                                            </button>
+                                        </td>
                                     </tr>
                                 `).join('')}
                             </tbody>
@@ -885,6 +1093,88 @@ export function RepeatCustomers() {
                     </div>
                 </div>
             `;
+
+            // Add click event to upload rows
+            uploadsSection.querySelectorAll('.upload-row').forEach(row => {
+                row.addEventListener('click', () => {
+                    const uploadId = parseInt(row.getAttribute('data-upload-id'));
+                    const fileName = row.getAttribute('data-upload-filename');
+                    const uploadedAt = row.getAttribute('data-upload-date');
+
+                    // Set active upload filter
+                    activeUploadFilter = {
+                        id: uploadId,
+                        fileName: fileName,
+                        uploadedAt: uploadedAt
+                    };
+
+                    // Switch to customer table tab
+                    currentTab = 'customers';
+                    customersSection.style.display = 'block';
+                    uploadsSection.style.display = 'none';
+
+                    // Update tab buttons
+                    container.querySelectorAll('.tab-btn').forEach(btn => {
+                        btn.classList.remove('active');
+                        if (btn.getAttribute('data-tab') === 'customers') {
+                            btn.classList.add('active');
+                        }
+                    });
+
+                    // Load customer data for this upload
+                    loadCustomerTable();
+                });
+            });
+
+            // Add delete button event listeners
+            uploadsSection.querySelectorAll('.btn-delete').forEach(btn => {
+                btn.addEventListener('click', async (e) => {
+                    e.stopPropagation(); // Prevent row click
+
+                    const uploadId = btn.getAttribute('data-upload-id');
+                    const fileName = btn.getAttribute('data-upload-filename');
+
+                    if (!confirm(`Are you sure you want to delete "${fileName}"?\n\nThis will permanently remove:\n• The upload record\n• All customer analysis data for this upload\n• All order records from this upload\n\nGlobal customer stats will be recalculated.`)) {
+                        return;
+                    }
+
+                    try {
+                        btn.disabled = true;
+                        btn.innerHTML = '<i class="ph ph-spinner" style="animation: spin 1s linear infinite;"></i> Deleting...';
+
+                        const resp = await fetch(`${API_BASE}/api/customers/uploads/${uploadId}`, {
+                            method: 'DELETE'
+                        });
+
+                        const result = await resp.json();
+
+                        if (result.success) {
+                            alert(`✅ Upload deleted successfully!\n\nDeleted:\n• ${result.deletedRecords.analysisRecords} analysis records\n• ${result.deletedRecords.orderRecords} order records\n• Affected ${result.affectedCustomers} customers`);
+
+                            // Clear active upload filter if it was the deleted one
+                            if (activeUploadFilter && activeUploadFilter.id === parseInt(uploadId)) {
+                                activeUploadFilter = null;
+                            }
+
+                            // Reload upload history
+                            loadUploadHistory();
+
+                            // Reload customer table if on that tab
+                            if (currentTab === 'customers') {
+                                loadCustomerTable();
+                            }
+                        } else {
+                            alert('❌ Error: ' + result.error);
+                            btn.disabled = false;
+                            btn.innerHTML = '<i class="ph ph-trash"></i> Delete';
+                        }
+                    } catch (err) {
+                        alert('❌ Delete error: ' + err.message);
+                        btn.disabled = false;
+                        btn.innerHTML = '<i class="ph ph-trash"></i> Delete';
+                    }
+                });
+            });
         } catch (err) {
             uploadsSection.innerHTML = `<div class="glass-card" style="padding: 2rem; color: #ef4444;">Error: ${err.message}</div>`;
         }

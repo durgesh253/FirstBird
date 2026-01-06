@@ -467,12 +467,42 @@ async function getCustomers(filters = {}) {
 
     console.log('[getCustomers] Found', customers.length, 'customers');
 
-    return customers.map(c => ({
-        ...c,
-        totalSpent: parseFloat(c.totalSpent || 0),
-        productsBought: JSON.parse(c.productsBought || '[]'),
-        allCities: JSON.parse(c.allCities || '[]')
+    // Aggregate products from order records for each customer
+    const customersWithProducts = await Promise.all(customers.map(async (c) => {
+        let productsBought = [];
+
+        try {
+            // Query ALL order records for this customer
+            const orderRecords = await prisma.cSVOrderRecord.findMany({
+                where: {
+                    customerPhone: c.phone
+                },
+                select: {
+                    productName: true
+                }
+            });
+
+            if (orderRecords && orderRecords.length > 0) {
+                // Extract, filter, and deduplicate products
+                const products = orderRecords
+                    .map(o => o.productName)
+                    .filter(p => p && p.trim() !== '');
+
+                productsBought = [...new Set(products)];
+            }
+        } catch (e) {
+            console.error(`[getCustomers] Error fetching products for ${c.phone}:`, e);
+        }
+
+        return {
+            ...c,
+            totalSpent: parseFloat(c.totalSpent || 0),
+            productsBought: productsBought, // Array of unique products
+            allCities: JSON.parse(c.allCities || '[]')
+        };
     }));
+
+    return customersWithProducts;
 }
 
 /**

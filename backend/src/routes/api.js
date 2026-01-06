@@ -934,6 +934,99 @@ router.get('/customers/uploads', async (req, res) => {
     }
 });
 
+// Delete a CSV upload and all associated data
+router.delete('/customers/uploads/:uploadId', async (req, res) => {
+    try {
+        const { uploadId } = req.params;
+        const id = parseInt(uploadId);
+
+        // Verify upload exists
+        const upload = await prisma.cSVUpload.findUnique({
+            where: { id },
+            include: {
+                _count: {
+                    select: {
+                        analysisRecords: true,
+                        orderRecords: true
+                    }
+                }
+            }
+        });
+
+        if (!upload) {
+            return res.status(404).json({ error: 'Upload not found' });
+        }
+
+        // Get all customer phones from this upload before deletion
+        const orderRecords = await prisma.cSVOrderRecord.findMany({
+            where: { uploadId: id },
+            select: { customerPhone: true }
+        });
+
+        const affectedPhones = [...new Set(orderRecords.map(r => r.customerPhone))];
+
+        // Delete the upload (cascade will handle CustomerAnalysis and CSVOrderRecord)
+        await prisma.cSVUpload.delete({
+            where: { id }
+        });
+
+        // Recalculate global customer stats for affected customers
+        for (const phone of affectedPhones) {
+            // Get remaining orders for this customer
+            const remainingOrders = await prisma.cSVOrderRecord.findMany({
+                where: { customerPhone: phone },
+                orderBy: { orderDate: 'desc' }
+            });
+
+            if (remainingOrders.length === 0) {
+                // No more orders - delete customer
+                await prisma.customer.deleteMany({
+                    where: { phone }
+                });
+            } else {
+                // Recalculate customer stats
+                const uniqueOrderIds = new Set(remainingOrders.map(o => o.orderId));
+                const totalOrders = uniqueOrderIds.size;
+                const totalSpent = remainingOrders.reduce((sum, o) => sum + parseFloat(o.orderAmount || 0), 0);
+                const products = [...new Set(remainingOrders.map(o => o.productName))];
+                const cities = [...new Set(remainingOrders.map(o => o.city).filter(Boolean))];
+                const latestOrder = remainingOrders[0];
+                const oldestOrder = remainingOrders[remainingOrders.length - 1];
+
+                await prisma.customer.updateMany({
+                    where: { phone },
+                    data: {
+                        totalOrders,
+                        isRepeatCustomer: totalOrders >= 2,
+                        totalSpent,
+                        lastProductOrdered: latestOrder.productName,
+                        lastOrderDate: latestOrder.orderDate,
+                        firstOrderDate: oldestOrder.orderDate,
+                        productsBought: JSON.stringify(products),
+                        allCities: JSON.stringify(cities),
+                        name: latestOrder.customerName || undefined,
+                        city: latestOrder.city || undefined
+                    }
+                });
+            }
+        }
+
+        res.json({
+            success: true,
+            message: 'Upload deleted successfully',
+            deletedRecords: {
+                analysisRecords: upload._count.analysisRecords,
+                orderRecords: upload._count.orderRecords
+            },
+            affectedCustomers: affectedPhones.length
+        });
+    } catch (err) {
+        console.error('[DELETE Upload] Error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+
 // ==== GLOBAL CUSTOMER TABLE ENDPOINTS ====
 
 // Get all customers from global table with filters
@@ -988,6 +1081,167 @@ router.get('/customers/global-stats', async (req, res) => {
         const stats = await customerAnalysisService.getGlobalStats();
         res.json(stats);
     } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Get global customer statistics
+router.get('/customers/global-stats', async (req, res) => {
+    try {
+        const stats = await customerAnalysisService.getGlobalStats();
+        res.json(stats);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Export customers with filters applied
+router.get('/customers/export-filtered', async (req, res) => {
+    try {
+        const {
+            repeatOnly,
+            searchPhone,
+            searchName,
+            searchCity,
+            sortBy = 'totalOrders',
+            sortOrder = 'desc',
+            format = 'csv',
+            uploadId // Optional: filter by specific upload
+        } = req.query;
+
+        let customers;
+
+        if (uploadId) {
+            // Export customers from specific upload
+            customers = await customerAnalysisService.getCustomerAnalysis(
+                parseInt(uploadId),
+                {
+                    customerType: repeatOnly === 'true' ? 'Repeat' : null,
+                    searchPhone,
+                    sortBy,
+                    sortOrder
+                }
+            );
+
+            // Map to consistent format
+            customers = customers.map(c => ({
+                name: c.customerName,
+                phone: c.customerPhone,
+                city: c.location || '—',
+                totalOrders: c.globalTotalOrders || c.totalOrders,
+                isRepeatCustomer: c.isRepeatCustomer,
+                lastProductOrdered: c.productsBought?.[c.productsBought.length - 1] || '—',
+                lastOrderDate: c.lastOrderDate,
+                totalSpent: c.globalTotalSpent || c.totalSpent
+            }));
+        } else {
+            // Export from global customer table
+            customers = await customerAnalysisService.getCustomers({
+                isRepeatOnly: repeatOnly === 'true',
+                searchPhone,
+                searchName,
+                searchCity,
+                sortBy,
+                sortOrder,
+                limit: 10000 // High limit for export
+            });
+
+            // Map to export format
+            customers = customers.map(c => ({
+                name: c.name,
+                phone: c.phone,
+                city: c.city || '—',
+                totalOrders: c.totalOrders,
+                isRepeatCustomer: c.isRepeatCustomer,
+                lastProductOrdered: c.lastProductOrdered || '—',
+                lastOrderDate: c.lastOrderDate,
+                totalSpent: c.totalSpent
+            }));
+        }
+
+        // Apply name and city filters if needed (for upload-specific exports)
+        if (searchName) {
+            customers = customers.filter(c =>
+                c.name?.toLowerCase().includes(searchName.toLowerCase())
+            );
+        }
+        if (searchCity) {
+            customers = customers.filter(c =>
+                c.city?.toLowerCase().includes(searchCity.toLowerCase())
+            );
+        }
+
+        // Aggregate products from actual order records for each customer
+        const exportData = await Promise.all(customers.map(async (c) => {
+            let allProducts = 'N/A';
+
+            try {
+                // Query ALL order records for this customer phone
+                const orderRecords = await prisma.cSVOrderRecord.findMany({
+                    where: {
+                        customerPhone: c.phone
+                    },
+                    select: {
+                        productName: true
+                    }
+                });
+
+                if (orderRecords && orderRecords.length > 0) {
+                    // Extract product names, filter out nulls/empty, and deduplicate
+                    const products = orderRecords
+                        .map(o => o.productName)
+                        .filter(p => p && p.trim() !== '');
+
+                    if (products.length > 0) {
+                        const uniqueProducts = [...new Set(products)];
+                        allProducts = uniqueProducts.join(' | ');
+                    }
+                }
+            } catch (e) {
+                console.error(`Error fetching products for ${c.phone}:`, e);
+                allProducts = 'N/A';
+            }
+
+            return {
+                'Customer Name': c.name || '—',
+                'Phone': c.phone,
+                'City': c.city,
+                'Total Orders': c.totalOrders,
+                'Repeat Status': c.isRepeatCustomer ? 'Repeat' : 'New',
+                'All Products Purchased': allProducts,
+                'Last Order Date': c.lastOrderDate ? new Date(c.lastOrderDate).toLocaleDateString() : '—',
+                'Total Spent': `₹${parseFloat(c.totalSpent || 0).toFixed(2)}`
+            };
+        }));
+
+        if (format === 'csv') {
+            // Convert to CSV format
+            if (exportData.length === 0) {
+                return res.status(404).json({ error: 'No customers found matching filters' });
+            }
+
+            const headers = Object.keys(exportData[0]);
+            const csvContent = [
+                headers.join(','),
+                ...exportData.map(row =>
+                    headers.map(h => {
+                        const val = row[h];
+                        return typeof val === 'string' && val.includes(',') ? `"${val}"` : val;
+                    }).join(',')
+                )
+            ].join('\n');
+
+            res.setHeader('Content-Type', 'text/csv');
+            res.setHeader('Content-Disposition', `attachment; filename="customers-${new Date().toISOString().split('T')[0]}.csv"`);
+            res.send(csvContent);
+        } else {
+            // JSON format
+            res.setHeader('Content-Type', 'application/json');
+            res.setHeader('Content-Disposition', `attachment; filename="customers-${new Date().toISOString().split('T')[0]}.json"`);
+            res.json(exportData);
+        }
+    } catch (err) {
+        console.error('[Export Filtered] Error:', err);
         res.status(500).json({ error: err.message });
     }
 });
@@ -1074,6 +1328,47 @@ router.post('/subscriptions/cancel', async (req, res) => {
     }
 });
 
+// Delete a subscription plan
+router.delete('/subscriptions/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const subscriptionId = parseInt(id);
+
+        if (isNaN(subscriptionId)) {
+            return res.status(400).json({ error: 'Invalid subscription ID' });
+        }
+
+        // Get subscription details before deleting
+        const subscription = await prisma.subscription.findUnique({
+            where: { id: subscriptionId },
+            include: {
+                _count: {
+                    select: {
+                        customerSubscriptions: true
+                    }
+                }
+            }
+        });
+
+        if (!subscription) {
+            return res.status(404).json({ error: 'Subscription not found' });
+        }
+
+        // Delete the subscription (cascade will delete customer subscriptions)
+        await prisma.subscription.delete({
+            where: { id: subscriptionId }
+        });
+
+        res.json({
+            success: true,
+            message: `Deleted subscription "${subscription.productName}" and ${subscription._count.customerSubscriptions} associated customer subscription(s)`
+        });
+    } catch (err) {
+        console.error('[DELETE /subscriptions/:id] Error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // Sync subscriptions from existing order data (backfill)
 router.post('/subscriptions/sync', async (req, res) => {
     try {
@@ -1084,6 +1379,194 @@ router.post('/subscriptions/sync', async (req, res) => {
             ...result
         });
     } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ==== LEADS ENDPOINTS ====
+
+// Get all leads
+router.get('/leads', async (req, res) => {
+    try {
+        const leads = await prisma.lead.findMany({
+            include: {
+                campaign: {
+                    select: {
+                        id: true,
+                        name: true,
+                        platformSource: true
+                    }
+                }
+            },
+            orderBy: { uploadedAt: 'desc' }
+        });
+
+        res.json(leads);
+    } catch (err) {
+        console.error('[GET /leads] Error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Create a single lead
+router.post('/leads', async (req, res) => {
+    try {
+        const { name, email, phone, campaignId, platformSource, status } = req.body;
+
+        // Validate required fields
+        if (!campaignId) {
+            return res.status(400).json({ error: 'campaignId is required' });
+        }
+
+        if (!email && !phone) {
+            return res.status(400).json({ error: 'Either email or phone is required' });
+        }
+
+        // Check if campaign exists
+        const campaign = await prisma.campaign.findUnique({
+            where: { id: parseInt(campaignId) }
+        });
+
+        if (!campaign) {
+            return res.status(404).json({ error: 'Campaign not found' });
+        }
+
+        // Create the lead
+        const lead = await prisma.lead.create({
+            data: {
+                name: name || null,
+                email: email || null,
+                phone: phone || null,
+                campaignId: parseInt(campaignId),
+                platformSource: platformSource || campaign.platformSource,
+                status: status || 'PENDING'
+            },
+            include: {
+                campaign: {
+                    select: {
+                        id: true,
+                        name: true,
+                        platformSource: true
+                    }
+                }
+            }
+        });
+
+        res.json(lead);
+    } catch (err) {
+        console.error('[POST /leads] Error:', err);
+
+        // Handle unique constraint violation
+        if (err.code === 'P2002') {
+            return res.status(400).json({
+                error: 'A lead with this email already exists for this campaign'
+            });
+        }
+
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Update a lead
+router.put('/leads/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { name, email, phone, status, platformSource } = req.body;
+
+        const lead = await prisma.lead.update({
+            where: { id: parseInt(id) },
+            data: {
+                ...(name !== undefined && { name }),
+                ...(email !== undefined && { email }),
+                ...(phone !== undefined && { phone }),
+                ...(status !== undefined && { status }),
+                ...(platformSource !== undefined && { platformSource })
+            },
+            include: {
+                campaign: {
+                    select: {
+                        id: true,
+                        name: true,
+                        platformSource: true
+                    }
+                }
+            }
+        });
+
+        res.json(lead);
+    } catch (err) {
+        console.error('[PUT /leads/:id] Error:', err);
+
+        if (err.code === 'P2025') {
+            return res.status(404).json({ error: 'Lead not found' });
+        }
+
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Upload bulk leads
+router.post('/leads/upload', async (req, res) => {
+    try {
+        const { campaignId, leads } = req.body;
+
+        if (!campaignId || !Array.isArray(leads) || leads.length === 0) {
+            return res.status(400).json({
+                error: 'campaignId and leads array are required'
+            });
+        }
+
+        // Check if campaign exists
+        const campaign = await prisma.campaign.findUnique({
+            where: { id: parseInt(campaignId) }
+        });
+
+        if (!campaign) {
+            return res.status(404).json({ error: 'Campaign not found' });
+        }
+
+        // Create leads in bulk
+        const createdLeads = [];
+        const errors = [];
+
+        for (const leadData of leads) {
+            try {
+                const lead = await prisma.lead.create({
+                    data: {
+                        name: leadData.name || null,
+                        email: leadData.email || null,
+                        phone: leadData.phone || null,
+                        campaignId: parseInt(campaignId),
+                        platformSource: leadData.platformSource || campaign.platformSource,
+                        status: leadData.status || 'PENDING'
+                    }
+                });
+                createdLeads.push(lead);
+            } catch (err) {
+                // Skip duplicates
+                if (err.code === 'P2002') {
+                    errors.push({
+                        email: leadData.email,
+                        error: 'Duplicate lead'
+                    });
+                } else {
+                    errors.push({
+                        email: leadData.email,
+                        error: err.message
+                    });
+                }
+            }
+        }
+
+        res.json({
+            success: true,
+            created: createdLeads.length,
+            errors: errors.length,
+            leads: createdLeads,
+            errorDetails: errors
+        });
+    } catch (err) {
+        console.error('[POST /leads/upload] Error:', err);
         res.status(500).json({ error: err.message });
     }
 });

@@ -19,6 +19,33 @@ export function Coupons() {
     </div>
   `;
 
+    // Search Section
+    const searchSection = document.createElement('div');
+    searchSection.className = 'card p-lg';
+    searchSection.innerHTML = `
+        <h3 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 1rem;">
+            <i class="ph ph-magnifying-glass" style="margin-right: 0.5rem;"></i>
+            Search Orders by Coupon Code
+        </h3>
+        <div style="display: flex; gap: 1rem; align-items: flex-end;">
+            <div style="flex: 1;">
+                <label style="display: block; margin-bottom: 0.5rem; font-weight: 500; font-size: 0.875rem;">
+                    Coupon Code
+                </label>
+                <input 
+                    type="text" 
+                    id="couponSearchInput"
+                    class="input" 
+                    placeholder="Enter coupon code (e.g., SUMMER20)"
+                    style="width: 100%; padding: 0.625rem 1rem; border: 1px solid #e5e7eb; border-radius: 0.5rem;">
+            </div>
+            <button id="searchCouponBtn" class="btn btn-primary" style="white-space: nowrap;">
+                <i class="ph ph-magnifying-glass" style="margin-right: 0.5rem;"></i> Search Orders
+            </button>
+        </div>
+    `;
+    container.appendChild(searchSection);
+
     // State/Loading container
     const content = document.createElement('div');
     content.className = 'flex flex-col gap-lg';
@@ -155,6 +182,102 @@ export function Coupons() {
             }
         });
         content.appendChild(table);
+
+        // Add search functionality
+        setTimeout(() => {
+            const searchBtn = container.querySelector('#searchCouponBtn');
+            const searchInput = container.querySelector('#couponSearchInput');
+
+            async function showCouponOrders(couponCode) {
+                try {
+                    searchBtn.disabled = true;
+                    const data = await api.getCouponDetails(couponCode);
+
+                    if (!data) {
+                        alert(`Coupon "${couponCode}" not found. Please check the code and try again.`);
+                        return;
+                    }
+                    const orders = data.recent_orders || [];
+
+                    if (orders.length === 0) {
+                        alert(`No orders found for coupon "${couponCode}". This coupon hasn't been used yet.`);
+                        return;
+                    }
+
+                    // Create drawer content
+                    const drawerContent = document.createElement('div');
+                    drawerContent.className = 'flex flex-col gap-md';
+
+                    drawerContent.innerHTML = `
+                        <div style="margin-bottom: 1rem; padding-bottom: 1rem; border-bottom: 1px solid #e5e7eb;">
+                            <h3 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 0.5rem;">
+                                Orders using "${couponCode}"
+                            </h3>
+                            <p class="text-muted">Showing ${orders.length} order${orders.length !== 1 ? 's' : ''}</p>
+                        </div>
+
+                        <div style="overflow-x: auto;">
+                            <table class="table" style="width: 100%; border-collapse: collapse;">
+                                <thead>
+                                    <tr style="background: #f9fafb; border-bottom: 2px solid #e5e7eb;">
+                                        <th style="padding: 0.75rem; text-align: left; font-weight: 600; font-size: 0.875rem;">Order ID</th>
+                                        <th style="padding: 0.75rem; text-align: left; font-weight: 600; font-size: 0.875rem;">Customer</th>
+                                        <th style="padding: 0.75rem; text-align: left; font-weight: 600; font-size: 0.875rem;">Date</th>
+                                        <th style="padding: 0.75rem; text-align: left; font-weight: 600; font-size: 0.875rem;">Amount</th>
+                                        <th style="padding: 0.75rem; text-align: left; font-weight: 600; font-size: 0.875rem;">Products</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${orders.map(order => `
+                                        <tr style="border-bottom: 1px solid #f3f4f6;">
+                                            <td style="padding: 0.75rem;"><strong>${order.id}</strong></td>
+                                            <td style="padding: 0.75rem;">
+                                                <div style="font-weight: 500;">${order.name || 'N/A'}</div>
+                                                <div class="text-sm text-muted">${order.email || order.phone || ''}</div>
+                                            </td>
+                                            <td style="padding: 0.75rem;">${new Date(order.date).toLocaleDateString()}</td>
+                                            <td style="padding: 0.75rem;"><strong>₹${Number(order.amount).toFixed(2)}</strong></td>
+                                            <td style="padding: 0.75rem; max-width: 200px; overflow: hidden; text-overflow: ellipsis;">${order.lineItems || 'N/A'}</td>
+                                        </tr>
+                                    `).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+                    `;
+
+                    // Show in drawer
+                    const drawer = Drawer({
+                        title: `Coupon: ${couponCode}`,
+                        content: drawerContent
+                    });
+                    document.body.appendChild(drawer);
+
+                } catch (error) {
+                    console.error('Error fetching coupon orders:', error);
+                    alert('Error loading orders. Please try again.');
+                } finally {
+                    searchBtn.disabled = false;
+                    searchBtn.innerHTML = '<i class="ph ph-magnifying-glass" style="margin-right: 0.5rem;"></i> Search Orders';
+                }
+            }
+
+            searchBtn?.addEventListener('click', async () => {
+                const couponCode = searchInput.value.trim().toUpperCase();
+                if (!couponCode) {
+                    alert('Please enter a coupon code');
+                    return;
+                }
+
+                await showCouponOrders(couponCode);
+            });
+
+            // Enter key support
+            searchInput?.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') {
+                    searchBtn.click();
+                }
+            });
+        }, 100);
     });
 
     return container;
