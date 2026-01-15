@@ -4,7 +4,7 @@ export function RepeatCustomers() {
     const container = document.createElement('div');
     container.className = 'repeat-customers-page';
 
-    const API_BASE = (location.hostname === 'localhost') ? 'http://localhost:3000' : '';
+    const API_BASE = (location.hostname === 'localhost') ? 'http://localhost:3000' : 'https://firstbird.onrender.com';
 
     // Helper function for safe API calls
     async function safeFetch(url, options = {}) {
