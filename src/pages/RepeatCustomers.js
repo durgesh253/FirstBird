@@ -6,6 +6,42 @@ export function RepeatCustomers() {
 
     const API_BASE = (location.hostname === 'localhost') ? 'http://localhost:3000' : '';
 
+    // Helper function for safe API calls
+    async function safeFetch(url, options = {}) {
+        try {
+            const resp = await fetch(url, options);
+            const contentType = resp.headers.get('content-type') || '';
+            
+            if (!resp.ok) {
+                const text = await resp.text();
+                // If it's HTML, it's likely an error page
+                if (contentType.includes('text/html')) {
+                    throw new Error(`Server returned HTML error page (${resp.status}). The API endpoint may not exist or the server may be misconfigured.`);
+                }
+                // Try to parse as JSON if possible
+                try {
+                    const json = JSON.parse(text);
+                    throw new Error(json.error || `API error (${resp.status}): ${text.substring(0, 200)}`);
+                } catch {
+                    throw new Error(`API error (${resp.status}): ${text.substring(0, 200)}`);
+                }
+            }
+            
+            if (!contentType.includes('application/json')) {
+                const text = await resp.text();
+                throw new Error(`Expected JSON but got ${contentType}. Response: ${text.substring(0, 200)}`);
+            }
+            
+            return await resp.json();
+        } catch (err) {
+            // Re-throw with more context if it's a network error
+            if (err instanceof TypeError && err.message.includes('fetch')) {
+                throw new Error(`Network error: Unable to reach API at ${url}. Make sure the backend server is running.`);
+            }
+            throw err;
+        }
+    }
+
     // Styles
     const styles = document.createElement('style');
     styles.textContent = `
@@ -642,8 +678,7 @@ export function RepeatCustomers() {
     // Load global customer stats
     async function loadStats() {
         try {
-            const resp = await fetch(`${API_BASE}/api/customers/global-stats`);
-            const stats = await resp.json();
+            const stats = await safeFetch(`${API_BASE}/api/customers/global-stats`);
             return stats;
         } catch (err) {
             console.error('Error loading stats:', err);
@@ -669,8 +704,7 @@ export function RepeatCustomers() {
                     sortOrder: 'desc'
                 });
 
-                const resp = await fetch(`${API_BASE}/api/customers/analysis/${activeUploadFilter.id}?${queryParams}`);
-                const data = await resp.json();
+                const data = await safeFetch(`${API_BASE}/api/customers/analysis/${activeUploadFilter.id}?${queryParams}`);
                 customers = data.customers.map(c => ({
                     name: c.customerName,
                     phone: c.customerPhone,
@@ -700,8 +734,7 @@ export function RepeatCustomers() {
                     sortOrder: 'desc'
                 });
 
-                const resp = await fetch(`${API_BASE}/api/customers/all?${queryParams}`);
-                const data = await resp.json();
+                const data = await safeFetch(`${API_BASE}/api/customers/all?${queryParams}`);
                 customers = data.customers;
             }
 
@@ -945,8 +978,7 @@ export function RepeatCustomers() {
     // Show customer detail modal
     async function showCustomerDetail(phone) {
         try {
-            const resp = await fetch(`${API_BASE}/api/customers/phone/${phone}`);
-            const customer = await resp.json();
+            const customer = await safeFetch(`${API_BASE}/api/customers/phone/${phone}`);
 
             const modal = document.createElement('div');
             modal.className = 'modal-overlay';
@@ -1041,8 +1073,7 @@ export function RepeatCustomers() {
         uploadsSection.innerHTML = '<div class="loading"><i class="ph ph-spinner" style="animation: spin 1s linear infinite;"></i> Loading uploads...</div>';
 
         try {
-            const resp = await fetch(`${API_BASE}/api/customers/uploads`);
-            const uploads = await resp.json();
+            const uploads = await safeFetch(`${API_BASE}/api/customers/uploads`);
 
             uploadsSection.innerHTML = `
                 <div class="glass-card">
@@ -1142,11 +1173,9 @@ export function RepeatCustomers() {
                         btn.disabled = true;
                         btn.innerHTML = '<i class="ph ph-spinner" style="animation: spin 1s linear infinite;"></i> Deleting...';
 
-                        const resp = await fetch(`${API_BASE}/api/customers/uploads/${uploadId}`, {
+                        const result = await safeFetch(`${API_BASE}/api/customers/uploads/${uploadId}`, {
                             method: 'DELETE'
                         });
-
-                        const result = await resp.json();
 
                         if (result.success) {
                             alert(`✅ Upload deleted successfully!\n\nDeleted:\n• ${result.deletedRecords.analysisRecords} analysis records\n• ${result.deletedRecords.orderRecords} order records\n• Affected ${result.affectedCustomers} customers`);
@@ -1262,13 +1291,11 @@ export function RepeatCustomers() {
                 btn.innerHTML = '<i class="ph ph-spinner" style="animation: spin 1s linear infinite;"></i> Processing...';
 
                 try {
-                    const resp = await fetch(`${API_BASE}/api/customers/upload-csv`, {
+                    const result = await safeFetch(`${API_BASE}/api/customers/upload-csv`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ csvContent: content })
                     });
-
-                    const result = await resp.json();
 
                     if (result.success) {
                         alert(`✅ Upload successful!\n\nUpload ID: ${result.uploadId}\nTotal Customers: ${result.totalCustomers || 0}\nNew: ${result.newCustomers || 0}\nRepeat: ${result.repeatCustomers || 0}`);
