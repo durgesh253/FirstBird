@@ -7,7 +7,8 @@ export default defineConfig({
     strictPort: false,
     allowedHosts: ['.onrender.com', 'localhost'],
     hmr: {
-      clientPort: 443
+      // Only use port 443 in production (Render.com), use default in development
+      ...(process.env.NODE_ENV === 'production' ? { clientPort: 443 } : {})
     }
   },
   preview: {

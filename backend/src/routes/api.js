@@ -427,7 +427,26 @@ router.get('/coupons', async (req, res) => {
             };
         }));
 
-        res.json(result);
+        // Get manual coupons and merge them
+        const manualCoupons = await prisma.manualCoupon.findMany({
+            where: { isActive: true }
+        });
+
+        const manualCouponsFormatted = manualCoupons.map(mc => ({
+            code: mc.code,
+            status: 'Manual',
+            ordersCount: mc.totalOrders,
+            totalRevenue: parseFloat(mc.totalRevenue),
+            currentMonthRevenue: 0,
+            lastUsed: mc.lastUsedAt,
+            aov: mc.totalOrders > 0 ? parseFloat((parseFloat(mc.totalRevenue) / mc.totalOrders).toFixed(2)) : 0,
+            source: 'manual',
+            createdBy: mc.createdBy
+        }));
+
+        const allCouponsData = [...result, ...manualCouponsFormatted];
+
+        res.json(allCouponsData);
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -1571,4 +1590,260 @@ router.post('/leads/upload', async (req, res) => {
     }
 });
 
+// ==== CALL STATUS & COUPON ASSIGNMENT ENDPOINTS ====
+
+// Update customer call status
+router.patch('/customers/:phone/call-status', async (req, res) => {
+    try {
+        const { phone } = req.params;
+        const { callStatus } = req.body;
+
+        // Validate call status
+        const validStatuses = ['NOT_CALLED', 'CALLED_INTERESTED', 'CALLED_NOT_INTERESTED', 'FOLLOW_UP_REQUIRED', 'CONVERTED'];
+        if (!validStatuses.includes(callStatus)) {
+            return res.status(400).json({ error: 'Invalid call status' });
+        }
+
+        // Update customer
+        const customer = await prisma.customer.updateMany({
+            where: { phone },
+            data: { callStatus }
+        });
+
+        if (customer.count === 0) {
+            return res.status(404).json({ error: 'Customer not found' });
+        }
+
+        // Fetch updated customer
+        const updated = await prisma.customer.findUnique({
+            where: { phone }
+        });
+
+        res.json(updated);
+    } catch (err) {
+        console.error('[PATCH /customers/:phone/call-status] Error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Assign coupon to customer
+router.post('/customers/:phone/assign-coupon', async (req, res) => {
+    try {
+        const { phone } = req.params;
+        const { couponCode, assignedBy } = req.body;
+
+        // Validate coupon code
+        if (!couponCode || couponCode.trim() === '') {
+            return res.status(400).json({ error: 'Coupon code is required' });
+        }
+
+        // Update customer
+        const customer = await prisma.customer.updateMany({
+            where: { phone },
+            data: {
+                assignedCouponCode: couponCode.trim().toUpperCase(),
+                couponAssignedAt: new Date(),
+                couponAssignedBy: assignedBy || 'Unknown'
+            }
+        });
+
+        if (customer.count === 0) {
+            return res.status(404).json({ error: 'Customer not found' });
+        }
+
+        // Fetch updated customer
+        const updated = await prisma.customer.findUnique({
+            where: { phone }
+        });
+
+        res.json(updated);
+    } catch (err) {
+        console.error('[POST /customers/:phone/assign-coupon] Error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Create manual coupon and fetch analytics
+router.post('/coupons/manual', async (req, res) => {
+    try {
+        const { couponCode, createdBy } = req.body;
+
+        // Validate coupon code
+        if (!couponCode || couponCode.trim() === '') {
+            return res.status(400).json({ error: 'Coupon code is required' });
+        }
+
+        const code = couponCode.trim().toUpperCase();
+
+        // Check if already exists
+        const existing = await prisma.manualCoupon.findUnique({
+            where: { code }
+        });
+
+        if (existing) {
+            return res.status(400).json({ error: 'Coupon code already exists' });
+        }
+
+        // Fetch orders using this coupon
+        const orders = await prisma.order.findMany({
+            where: {
+                couponCode: code,
+                financialStatus: { in: ['paid', 'partially_paid'] }
+            },
+            orderBy: { shopifyCreatedAt: 'desc' }
+        });
+
+        // Calculate metrics
+        const totalOrders = orders.length;
+        const totalRevenue = orders.reduce((sum, o) => sum + parseFloat(o.totalAmount || 0), 0);
+        const lastUsedAt = orders.length > 0 ? orders[0].shopifyCreatedAt : null;
+
+        // Calculate monthly breakdown
+        const monthlyData = {};
+        orders.forEach(order => {
+            const date = new Date(order.shopifyCreatedAt);
+            const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+            if (!monthlyData[monthKey]) {
+                monthlyData[monthKey] = { month: monthKey, revenue: 0, orders: 0 };
+            }
+            monthlyData[monthKey].revenue += parseFloat(order.totalAmount);
+            monthlyData[monthKey].orders += 1;
+        });
+
+        // Create manual coupon record
+        const manualCoupon = await prisma.manualCoupon.create({
+            data: {
+                code,
+                createdBy: createdBy || 'Unknown',
+                totalOrders,
+                totalRevenue,
+                lastUsedAt
+            }
+        });
+
+        res.json({
+            ...manualCoupon,
+            totalRevenue: parseFloat(manualCoupon.totalRevenue),
+            monthlyBreakdown: Object.values(monthlyData).sort((a, b) => a.month.localeCompare(b.month)),
+            recentOrders: orders.slice(0, 10).map(o => ({
+                id: o.shopifyOrderId,
+                amount: parseFloat(o.totalAmount),
+                date: o.shopifyCreatedAt,
+                customerName: o.customerName,
+                customerEmail: o.customerEmail,
+                customerPhone: o.customerPhone
+            }))
+        });
+    } catch (err) {
+        console.error('[POST /coupons/manual] Error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Get analytics for manual coupon
+router.get('/coupons/manual/:code/analytics', async (req, res) => {
+    try {
+        const { code } = req.params;
+
+        // Fetch manual coupon
+        const manualCoupon = await prisma.manualCoupon.findUnique({
+            where: { code: code.toUpperCase() }
+        });
+
+        if (!manualCoupon) {
+            return res.status(404).json({ error: 'Manual coupon not found' });
+        }
+
+        // Fetch orders
+        const orders = await prisma.order.findMany({
+            where: {
+                couponCode: code.toUpperCase(),
+                financialStatus: { in: ['paid', 'partially_paid'] }
+            },
+            orderBy: { shopifyCreatedAt: 'desc' }
+        });
+
+        // Calculate metrics
+        const totalOrders = orders.length;
+        const totalRevenue = orders.reduce((sum, o) => sum + parseFloat(o.totalAmount || 0), 0);
+        const lastUsedAt = orders.length > 0 ? orders[0].shopifyCreatedAt : null;
+
+        // Calculate monthly breakdown
+        const monthlyData = {};
+        orders.forEach(order => {
+            const date = new Date(order.shopifyCreatedAt);
+            const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+            if (!monthlyData[monthKey]) {
+                monthlyData[monthKey] = { month: monthKey, revenue: 0, orders: 0 };
+            }
+            monthlyData[monthKey].revenue += parseFloat(order.totalAmount);
+            monthlyData[monthKey].orders += 1;
+        });
+
+        // Update manual coupon with latest stats
+        await prisma.manualCoupon.update({
+            where: { code: code.toUpperCase() },
+            data: { totalOrders, totalRevenue, lastUsedAt }
+        });
+
+        res.json({
+            code: manualCoupon.code,
+            totalOrders,
+            totalRevenue,
+            lastUsedAt,
+            monthlyBreakdown: Object.values(monthlyData).sort((a, b) => a.month.localeCompare(b.month)),
+            recentOrders: orders.slice(0, 10).map(o => ({
+                id: o.shopifyOrderId,
+                amount: parseFloat(o.totalAmount),
+                date: o.shopifyCreatedAt,
+                customerName: o.customerName,
+                customerEmail: o.customerEmail,
+                customerPhone: o.customerPhone
+            }))
+        });
+    } catch (err) {
+        console.error('[GET /coupons/manual/:code/analytics] Error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Get all manual coupons
+router.get('/coupons/manual', async (req, res) => {
+    try {
+        const manualCoupons = await prisma.manualCoupon.findMany({
+            where: { isActive: true },
+            orderBy: { createdAt: 'desc' }
+        });
+
+        res.json(manualCoupons);
+    } catch (err) {
+        console.error('[GET /coupons/manual] Error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Delete a manual coupon
+router.delete('/coupons/manual/:code', async (req, res) => {
+    try {
+        const { code } = req.params;
+
+        const deleted = await prisma.manualCoupon.delete({
+            where: { code: code.toUpperCase() }
+        });
+
+        res.json({
+            success: true,
+            message: `Coupon "${code}" deleted successfully`,
+            deleted
+        });
+    } catch (err) {
+        if (err.code === 'P2025') {
+            return res.status(404).json({ error: 'Coupon not found' });
+        }
+        console.error('[DELETE /coupons/manual/:code] Error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
 module.exports = router;
+

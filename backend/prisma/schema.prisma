@@ -111,12 +111,20 @@ model Customer {
   totalSpent          Decimal   @default(0)
   productsBought      String?             // JSON array of all products
   allCities           String?             // JSON array of all cities
+  
+  // Call tracking fields
+  callStatus          String?   @default("NOT_CALLED")  // NOT_CALLED, CALLED_INTERESTED, CALLED_NOT_INTERESTED, FOLLOW_UP_REQUIRED, CONVERTED
+  assignedCouponCode  String?             // Manually assigned coupon
+  couponAssignedAt    DateTime?           // When coupon was assigned
+  couponAssignedBy    String?             // Agent who assigned the coupon
+  
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
   orderRecords        CSVOrderRecord[]
   
   @@index([phone])
   @@index([isRepeatCustomer])
+  @@index([callStatus])
 }
 
 // Per-upload analysis (kept for backwards compatibility)
@@ -214,3 +222,21 @@ model CustomerSubscription {
   @@index([subscriptionId])
   @@index([status])
 }
+
+// Manual Coupon Tracking
+// For coupons added manually by agents for analytics
+model ManualCoupon {
+  id              Int       @id @default(autoincrement())
+  code            String    @unique
+  createdAt       DateTime  @default(now())
+  createdBy       String?             // Agent who added it
+  totalOrders     Int       @default(0)
+  totalRevenue    Decimal   @default(0)
+  lastUsedAt      DateTime?
+  isActive        Boolean   @default(true)
+  updatedAt       DateTime  @updatedAt
+  
+  @@index([code])
+  @@index([isActive])
+}
+

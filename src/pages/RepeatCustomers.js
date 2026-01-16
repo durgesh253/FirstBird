@@ -1,4 +1,6 @@
 import { api } from '../services/api';
+import { BottomSheet } from '../components/BottomSheet';
+import { CallStatusDropdown } from '../components/CallStatusDropdown';
 
 export function RepeatCustomers() {
     const container = document.createElement('div');
@@ -11,7 +13,7 @@ export function RepeatCustomers() {
         try {
             const resp = await fetch(url, options);
             const contentType = resp.headers.get('content-type') || '';
-            
+
             if (!resp.ok) {
                 const text = await resp.text();
                 // If it's HTML, it's likely an error page
@@ -26,12 +28,12 @@ export function RepeatCustomers() {
                     throw new Error(`API error (${resp.status}): ${text.substring(0, 200)}`);
                 }
             }
-            
+
             if (!contentType.includes('application/json')) {
                 const text = await resp.text();
                 throw new Error(`Expected JSON but got ${contentType}. Response: ${text.substring(0, 200)}`);
             }
-            
+
             return await resp.json();
         } catch (err) {
             // Re-throw with more context if it's a network error
@@ -857,6 +859,8 @@ export function RepeatCustomers() {
                                     <th>City</th>
                                     <th>Total Orders</th>
                                     <th>Repeat Customer</th>
+                                    <th>Call Status</th>
+                                    <th>Assigned Coupon</th>
                                     <th>All Products Purchased</th>
                                     <th>Last Order Date</th>
                                     <th>Actions</th>
@@ -865,23 +869,34 @@ export function RepeatCustomers() {
                             <tbody>
                                 ${customers.length === 0 ? `
                                     <tr>
-                                        <td colspan="8" class="empty-state">
+                                        <td colspan="10" class="empty-state">
                                             <i class="ph ph-users"></i>
                                             <p>No customers found. Upload order data to get started.</p>
                                         </td>
                                     </tr>
                                 ` : customers.map(c => `
-                                    <tr class="${c.isRepeatCustomer ? 'repeat-customer' : ''}">
-                                        <td><span class="customer-name">${c.name || '—'}</span></td>
-                                        <td>${c.phone}</td>
-                                        <td>${c.city || '—'}</td>
-                                        <td><strong>${c.totalOrders}</strong></td>
-                                        <td>
+                                    <tr class="${c.isRepeatCustomer ? 'repeat-customer' : ''}" data-phone="${c.phone}">
+                                        <td data-label="Name"><span class="customer-name">${c.name || '—'}</span></td>
+                                        <td data-label="Phone">${c.phone}</td>
+                                        <td data-label="City">${c.city || '—'}</td>
+                                        <td data-label="Orders"><strong>${c.totalOrders}</strong></td>
+                                        <td data-label="Type">
                                             <span class="badge ${c.isRepeatCustomer ? 'badge-repeat' : 'badge-new'}">
                                                 ${c.isRepeatCustomer ? '🔄 Yes' : '✨ No'}
                                             </span>
                                         </td>
-                                        <td>${(() => {
+                                        <td data-label="Call Status" class="call-status-cell" data-phone="${c.phone}" data-status="${c.callStatus || 'NOT_CALLED'}"></td>
+                                        <td data-label="Coupon">
+                                            ${c.assignedCouponCode ? `
+                                                <div style="display: flex; flex-direction: column; gap: 0.25rem;">
+                                                    <span style="font-weight: 600; color: #4f46e5;">${c.assignedCouponCode}</span>
+                                                    <span style="font-size: 0.75rem; color: #6b7280;">
+                                                        ${c.couponAssignedAt ? new Date(c.couponAssignedAt).toLocaleDateString() : ''}
+                                                    </span>
+                                                </div>
+                                            ` : '<span style="color: #9ca3af;">—</span>'}
+                                        </td>
+                                        <td data-label="Products">${(() => {
                     try {
                         const products = Array.isArray(c.productsBought) ? c.productsBought : [];
                         if (products && products.length > 0) {
@@ -892,11 +907,16 @@ export function RepeatCustomers() {
                     }
                     return 'N/A';
                 })()}</td>
-                                        <td>${c.lastOrderDate ? new Date(c.lastOrderDate).toLocaleDateString() : '—'}</td>
-                                        <td>
-                                            <button class="btn-details" data-phone="${c.phone}">
-                                                <i class="ph ph-eye"></i> Details
-                                            </button>
+                                        <td data-label="Last Order">${c.lastOrderDate ? new Date(c.lastOrderDate).toLocaleDateString() : '—'}</td>
+                                        <td data-label="Actions">
+                                            <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                                                <button class="btn-details" data-phone="${c.phone}">
+                                                    <i class="ph ph-eye"></i> Details
+                                                </button>
+                                                <button class="btn-assign-coupon" data-phone="${c.phone}" data-name="${c.name || 'Customer'}" style="background: #10b981; color: white; border: none; padding: 0.5rem 1rem; border-radius: 8px; font-size: 0.8rem; font-weight: 600; cursor: pointer;">
+                                                    <i class="ph ph-ticket"></i> Assign Coupon
+                                                </button>
+                                            </div>
                                         </td>
                                     </tr>
                                 `).join('')}
@@ -967,6 +987,31 @@ export function RepeatCustomers() {
             customersSection.querySelectorAll('.btn-details').forEach(btn => {
                 btn.addEventListener('click', () => {
                     showCustomerDetail(btn.getAttribute('data-phone'));
+                });
+            });
+
+            // Initialize call status dropdowns
+            customersSection.querySelectorAll('.call-status-cell').forEach(cell => {
+                const phone = cell.getAttribute('data-phone');
+                const currentStatus = cell.getAttribute('data-status') || 'NOT_CALLED';
+
+                const dropdown = CallStatusDropdown({
+                    phone,
+                    currentStatus,
+                    onUpdate: (updatedCustomer) => {
+                        console.log('Call status updated:', updatedCustomer);
+                    }
+                });
+
+                cell.appendChild(dropdown);
+            });
+
+            // Assign coupon button handlers
+            customersSection.querySelectorAll('.btn-assign-coupon').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const phone = btn.getAttribute('data-phone');
+                    const name = btn.getAttribute('data-name');
+                    showAssignCouponModal(phone, name);
                 });
             });
 
@@ -1066,6 +1111,66 @@ export function RepeatCustomers() {
         } catch (err) {
             alert('Error loading customer details: ' + err.message);
         }
+    }
+
+    // Show assign coupon modal
+    function showAssignCouponModal(phone, name) {
+        const modalContent = document.createElement('div');
+        modalContent.innerHTML = `
+            <div style="margin-bottom: 1.5rem;">
+                <div style="background: #f3f4f6; padding: 1rem; border-radius: 12px; margin-bottom: 1rem;">
+                    <div style="font-size: 0.875rem; color: #6b7280; margin-bottom: 0.25rem;">Customer</div>
+                    <div style="font-weight: 600; font-size: 1.125rem; color: #111827;">${name}</div>
+                    <div style="font-size: 0.875rem; color: #6b7280; margin-top: 0.25rem;">${phone}</div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Coupon Code</label>
+                    <input type="text" id="couponCodeInput" class="input" placeholder="Enter coupon code (e.g., WELCOME20)" style="text-transform: uppercase;">
+                </div>
+                <div class="form-group" style="margin-top: 1rem;">
+                    <label class="form-label">Assigned By (Optional)</label>
+                    <input type="text" id="assignedByInput" class="input" placeholder="Your name or agent ID">
+                </div>
+                <button id="submitCouponBtn" class="btn btn-primary" style="width: 100%; margin-top: 1.5rem; background: #10b981;">
+                    <i class="ph ph-ticket"></i> Assign Coupon
+                </button>
+            </div>
+        `;
+
+        const bottomSheet = BottomSheet({ title: 'Assign Coupon', content: modalContent, onClose: () => { } });
+
+        setTimeout(() => {
+            const submitBtn = modalContent.querySelector('#submitCouponBtn');
+            const couponInput = modalContent.querySelector('#couponCodeInput');
+            const assignedByInput = modalContent.querySelector('#assignedByInput');
+
+            const handleSubmit = async () => {
+                const couponCode = couponInput.value.trim().toUpperCase();
+                if (!couponCode) { alert('Please enter a coupon code'); couponInput.focus(); return; }
+
+                submitBtn.disabled = true;
+                submitBtn.innerHTML = '<i class="ph ph-spinner" style="animation: spin 1s linear infinite;"></i> Assigning...';
+
+                try {
+                    await safeFetch(`${API_BASE}/api/customers/${phone}/assign-coupon`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ couponCode, assignedBy: assignedByInput.value.trim() || 'Unknown' })
+                    });
+                    bottomSheet.querySelector('.bottom-sheet-close').click();
+                    alert(`Coupon "${couponCode}" assigned successfully to ${name}!`);
+                    loadCustomerTable();
+                } catch (error) {
+                    console.error('Error assigning coupon:', error);
+                    alert('Failed to assign coupon. Please try again.');
+                    submitBtn.disabled = false;
+                    submitBtn.innerHTML = '<i class="ph ph-ticket"></i> Assign Coupon';
+                }
+            };
+
+            submitBtn.addEventListener('click', handleSubmit);
+            couponInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') handleSubmit(); });
+        }, 100);
     }
 
     // Load upload history

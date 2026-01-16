@@ -717,3 +717,290 @@ a {
     padding: 0 0.5rem;
   }
 }
+
+/* ===== BOTTOM SHEET COMPONENT ===== */
+.bottom-sheet-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(4px);
+  z-index: 10000;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.bottom-sheet-overlay.active {
+  opacity: 1;
+}
+
+.bottom-sheet {
+  background: white;
+  width: 100%;
+  max-height: 90vh;
+  border-radius: 20px 20px 0 0;
+  box-shadow: 0 -10px 40px rgba(0, 0, 0, 0.2);
+  transform: translateY(100%);
+  transition: transform 0.3s cubic-bezier(0.32, 0.72, 0, 1);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.bottom-sheet-overlay.active .bottom-sheet {
+  transform: translateY(0);
+}
+
+.bottom-sheet.desktop {
+  max-width: 600px;
+  border-radius: 20px;
+  margin: auto;
+  transform: translateY(20px) scale(0.95);
+}
+
+.bottom-sheet-overlay.active .bottom-sheet.desktop {
+  transform: translateY(0) scale(1);
+}
+
+.bottom-sheet-header {
+  padding: 1.25rem 1.5rem;
+  border-bottom: 1px solid #e5e7eb;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: relative;
+}
+
+.bottom-sheet-handle {
+  position: absolute;
+  top: 0.5rem;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 40px;
+  height: 4px;
+  background: #d1d5db;
+  border-radius: 2px;
+}
+
+.bottom-sheet.desktop .bottom-sheet-handle {
+  display: none;
+}
+
+.bottom-sheet-header h3 {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: #111827;
+}
+
+.bottom-sheet-close {
+  background: #f3f4f6;
+  border: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s;
+  color: #6b7280;
+}
+
+.bottom-sheet-close:hover {
+  background: #e5e7eb;
+  color: #111827;
+}
+
+.bottom-sheet-body {
+  padding: 1.5rem;
+  overflow-y: auto;
+  flex: 1;
+}
+
+/* ===== CALL STATUS DROPDOWN ===== */
+.call-status-dropdown {
+  position: relative;
+  display: inline-block;
+}
+
+.call-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 8px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  user-select: none;
+  min-width: 160px;
+  justify-content: space-between;
+}
+
+.call-status-badge:hover {
+  opacity: 0.8;
+  transform: translateY(-1px);
+}
+
+.call-status-badge i {
+  font-size: 0.875rem;
+  transition: transform 0.2s;
+}
+
+.call-status-dropdown:hover .call-status-badge i {
+  transform: rotate(180deg);
+}
+
+.call-status-menu {
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  left: 0;
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.15);
+  z-index: 1000;
+  min-width: 220px;
+  overflow: hidden;
+  animation: slideDown 0.2s ease;
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.call-status-option {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  cursor: pointer;
+  transition: all 0.15s;
+  font-size: 0.875rem;
+  color: #374151;
+  position: relative;
+}
+
+.call-status-option:hover {
+  background: #f9fafb;
+}
+
+.call-status-option.active {
+  background: #f3f4f6;
+  font-weight: 600;
+}
+
+.call-status-option .status-indicator {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.call-status-option i.ph-check {
+  margin-left: auto;
+  color: #10b981;
+  font-size: 1rem;
+}
+
+/* Mobile optimizations for call status */
+@media (max-width: 768px) {
+  .call-status-badge {
+    min-width: 140px;
+    padding: 0.4rem 0.6rem;
+    font-size: 0.8rem;
+  }
+  
+  .call-status-menu {
+    min-width: 200px;
+  }
+  
+  .call-status-option {
+    padding: 0.65rem 0.85rem;
+    font-size: 0.8rem;
+  }
+}
+
+/* Action menu for mobile */
+.action-menu {
+  position: relative;
+  display: inline-block;
+}
+
+.action-menu-button {
+  background: #f3f4f6;
+  border: none;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: #6b7280;
+  transition: all 0.2s;
+}
+
+.action-menu-button:hover {
+  background: #e5e7eb;
+  color: #111827;
+}
+
+.action-menu-dropdown {
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  right: 0;
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.15);
+  z-index: 1000;
+  min-width: 180px;
+  overflow: hidden;
+  animation: slideDown 0.2s ease;
+}
+
+.action-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  cursor: pointer;
+  transition: all 0.15s;
+  font-size: 0.875rem;
+  color: #374151;
+  border: none;
+  background: none;
+  width: 100%;
+  text-align: left;
+}
+
+.action-menu-item:hover {
+  background: #f9fafb;
+}
+
+.action-menu-item i {
+  font-size: 1.125rem;
+  color: #6b7280;
+}
+
+/* Touch-friendly buttons */
+@media (max-width: 768px) {
+  .btn,
+  .action-menu-button,
+  .call-status-badge {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}

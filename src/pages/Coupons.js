@@ -3,10 +3,13 @@ import { ChartComponent } from '../components/ChartComponent';
 import { Table } from '../components/Table';
 import { Drawer } from '../components/Drawer';
 import { api } from '../services/api';
+import { BottomSheet } from '../components/BottomSheet';
 
 export function Coupons() {
     const container = document.createElement('div');
     container.className = 'flex flex-col gap-lg';
+
+    const API_BASE = (location.hostname === 'localhost') ? 'http://localhost:3000' : 'https://firstbird.onrender.com';
 
     // Header
     container.innerHTML = `
@@ -15,7 +18,7 @@ export function Coupons() {
         <h1 style="font-size: 1.875rem; font-weight: 700; color: var(--color-text-main);">Coupons</h1>
         <p class="text-muted">Manage and track your coupon performance.</p>
       </div>
-      <button class="btn btn-primary"><i class="ph ph-plus" style="margin-right: 0.5rem;"></i> New Coupon</button>
+      <button id="newCouponBtn" class="btn btn-primary"><i class="ph ph-plus" style="margin-right: 0.5rem;"></i> New Coupon</button>
     </div>
   `;
 
@@ -279,6 +282,78 @@ export function Coupons() {
             });
         }, 100);
     });
+
+    // New Coupon button handler
+    setTimeout(() => {
+        container.querySelector('#newCouponBtn')?.addEventListener('click', () => {
+            const modalContent = document.createElement('div');
+            modalContent.innerHTML = `
+                <div style="margin-bottom: 1.5rem;">
+                    <p style="color: #6b7280; font-size: 0.875rem; margin-bottom: 1rem;">
+                        Enter a coupon code to track its performance. The system will automatically fetch all orders using this coupon.
+                    </p>
+                    <div class="form-group">
+                        <label class="form-label">Coupon Code</label>
+                        <input type="text" id="newCouponCodeInput" class="input" placeholder="Enter coupon code (e.g., YOGREET10)" style="text-transform: uppercase;">
+                    </div>
+                    <div class="form-group" style="margin-top: 1rem;">
+                        <label class="form-label">Created By (Optional)</label>
+                        <input type="text" id="createdByInput" class="input" placeholder="Your name">
+                    </div>
+                    <button id="submitNewCouponBtn" class="btn btn-primary" style="width: 100%; margin-top: 1.5rem;">
+                        <i class="ph ph-plus"></i> Add Coupon for Tracking
+                    </button>
+                </div>
+            `;
+
+            const bottomSheet = BottomSheet({ title: 'Track New Coupon', content: modalContent, onClose: () => { } });
+
+            setTimeout(() => {
+                const submitBtn = modalContent.querySelector('#submitNewCouponBtn');
+                const couponInput = modalContent.querySelector('#newCouponCodeInput');
+                const createdByInput = modalContent.querySelector('#createdByInput');
+
+                const handleSubmit = async () => {
+                    const couponCode = couponInput.value.trim().toUpperCase();
+                    if (!couponCode) { alert('Please enter a coupon code'); couponInput.focus(); return; }
+
+                    submitBtn.disabled = true;
+                    submitBtn.innerHTML = '<i class="ph ph-spinner" style="animation: spin 1s linear infinite;"></i> Adding...';
+
+                    try {
+                        const response = await fetch(`${API_BASE}/api/coupons/manual`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ couponCode, createdBy: createdByInput.value.trim() || 'Unknown' })
+                        });
+
+                        if (!response.ok) {
+                            const error = await response.json();
+                            throw new Error(error.error || 'Failed to add coupon');
+                        }
+
+                        const data = await response.json();
+                        bottomSheet.querySelector('.bottom-sheet-close').click();
+
+                        const message = data.totalOrders > 0
+                            ? `Coupon "${couponCode}" added!\n\nFound ${data.totalOrders} orders with ₹${data.totalRevenue.toFixed(2)} revenue`
+                            : `Coupon "${couponCode}" added!\n\nNo orders found yet. Analytics will update automatically.`;
+
+                        alert(message);
+                        window.location.reload();
+                    } catch (error) {
+                        console.error('Error adding coupon:', error);
+                        alert(error.message || 'Failed to add coupon. Please try again.');
+                        submitBtn.disabled = false;
+                        submitBtn.innerHTML = '<i class="ph ph-plus"></i> Add Coupon for Tracking';
+                    }
+                };
+
+                submitBtn.addEventListener('click', handleSubmit);
+                couponInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') handleSubmit(); });
+            }, 100);
+        });
+    }, 100);
 
     return container;
 }
