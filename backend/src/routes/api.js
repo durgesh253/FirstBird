@@ -390,42 +390,48 @@ router.get('/coupons', async (req, res) => {
             select: { code: true, id: true, status: true }
         });
 
-        // 2. Get coupon order stats
+        // 2. Get coupon order stats (All Time)
+        // Note: Relaxed filter to show all orders, not just paid ones, per user request for visibility
         const couponGroups = await prisma.order.groupBy({
             by: ['couponCode'],
             where: {
-                couponCode: { not: null, notIn: COUPON_BLOCKLIST },
-                financialStatus: { in: ['paid', 'partially_paid'] }
+                couponCode: { not: null, notIn: COUPON_BLOCKLIST }
+                // Removed financialStatus filter to show ALL attempts
             },
             _sum: { totalAmount: true },
             _count: { id: true },
             _max: { shopifyCreatedAt: true }
         });
 
+        // 3. Get Current Month Stats (Optimized: Single GroupBy instead of Loop)
+        const currentMonthGroups = await prisma.order.groupBy({
+            by: ['couponCode'],
+            where: {
+                couponCode: { not: null, notIn: COUPON_BLOCKLIST },
+                shopifyCreatedAt: { gte: startOfMonth }
+                // Removed financialStatus filter
+            },
+            _sum: { totalAmount: true }
+        });
+
         const couponMap = new Map(couponGroups.map(g => [g.couponCode, g]));
+        const currentMonthMap = new Map(currentMonthGroups.map(g => [g.couponCode, g]));
 
-        const result = await Promise.all(allCoupons.map(async (coupon) => {
+        // 4. Merge Data in Memory
+        const result = allCoupons.map(coupon => {
             const group = couponMap.get(coupon.code);
-
-            const currentMonthAgg = await prisma.order.aggregate({
-                where: {
-                    couponCode: coupon.code,
-                    financialStatus: { in: ['paid', 'partially_paid'] },
-                    shopifyCreatedAt: { gte: startOfMonth }
-                },
-                _sum: { totalAmount: true }
-            });
+            const currentMonthGroup = currentMonthMap.get(coupon.code);
 
             return {
                 code: coupon.code,
                 status: coupon.status || 'Active',
                 ordersCount: group ? (group._count.id || 0) : 0,
                 totalRevenue: group ? parseFloat(group._sum.totalAmount || 0) : 0,
-                currentMonthRevenue: parseFloat(currentMonthAgg._sum.totalAmount || 0),
+                currentMonthRevenue: currentMonthGroup ? parseFloat(currentMonthGroup._sum.totalAmount || 0) : 0,
                 lastUsed: group ? group._max.shopifyCreatedAt : null,
                 aov: group && group._count.id > 0 ? parseFloat((parseFloat(group._sum.totalAmount || 0) / group._count.id).toFixed(2)) : 0
             };
-        }));
+        });
 
         // Get manual coupons and merge them
         const manualCoupons = await prisma.manualCoupon.findMany({
@@ -437,7 +443,7 @@ router.get('/coupons', async (req, res) => {
             status: 'Manual',
             ordersCount: mc.totalOrders,
             totalRevenue: parseFloat(mc.totalRevenue),
-            currentMonthRevenue: 0,
+            currentMonthRevenue: 0, // Manual coupons don't track monthly separately in schema yet, could be added later
             lastUsed: mc.lastUsedAt,
             aov: mc.totalOrders > 0 ? parseFloat((parseFloat(mc.totalRevenue) / mc.totalOrders).toFixed(2)) : 0,
             source: 'manual',
@@ -448,6 +454,7 @@ router.get('/coupons', async (req, res) => {
 
         res.json(allCouponsData);
     } catch (err) {
+        console.error('[GET /coupons] Error:', err);
         res.status(500).json({ error: err.message });
     }
 });
@@ -534,8 +541,8 @@ router.get('/coupons/:code/details', async (req, res) => {
 
         const orders = await prisma.order.findMany({
             where: {
-                couponCode: code,
-                financialStatus: { in: ['paid', 'partially_paid'] }
+                couponCode: code
+                // Relaxed: Removed financialStatus filter to show ALL orders (pending, etc.)
             },
             orderBy: { shopifyCreatedAt: 'desc' }
         });
@@ -1687,8 +1694,8 @@ router.post('/coupons/manual', async (req, res) => {
         // Fetch orders using this coupon
         const orders = await prisma.order.findMany({
             where: {
-                couponCode: code,
-                financialStatus: { in: ['paid', 'partially_paid'] }
+                couponCode: code
+                // Relaxed: Removed financialStatus filter
             },
             orderBy: { shopifyCreatedAt: 'desc' }
         });
@@ -1757,8 +1764,8 @@ router.get('/coupons/manual/:code/analytics', async (req, res) => {
         // Fetch orders
         const orders = await prisma.order.findMany({
             where: {
-                couponCode: code.toUpperCase(),
-                financialStatus: { in: ['paid', 'partially_paid'] }
+                couponCode: code.toUpperCase()
+                // Relaxed: Removed financialStatus filter
             },
             orderBy: { shopifyCreatedAt: 'desc' }
         });

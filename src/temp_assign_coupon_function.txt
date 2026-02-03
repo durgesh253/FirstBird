@@ -1,0 +1,101 @@
+// Temporary file to add the showAssignCouponModal function
+// This will be inserted into RepeatCustomers.js
+
+    // Show assign coupon modal
+    function showAssignCouponModal(phone, name) {
+        const modalContent = document.createElement('div');
+        modalContent.innerHTML = `
+            <div style="margin-bottom: 1.5rem;">
+                <div style="background: #f3f4f6; padding: 1rem; border-radius: 12px; margin-bottom: 1rem;">
+                    <div style="font-size: 0.875rem; color: #6b7280; margin-bottom: 0.25rem;">Customer</div>
+                    <div style="font-weight: 600; font-size: 1.125rem; color: #111827;">${name}</div>
+                    <div style="font-size: 0.875rem; color: #6b7280; margin-top: 0.25rem;">${phone}</div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Coupon Code</label>
+                    <input 
+                        type="text" 
+                        id="couponCodeInput" 
+                        class="input" 
+                        placeholder="Enter coupon code (e.g., WELCOME20)"
+                        style="text-transform: uppercase;"
+                    >
+                </div>
+
+                <div class="form-group" style="margin-top: 1rem;">
+                    <label class="form-label">Assigned By (Optional)</label>
+                    <input 
+                        type="text" 
+                        id="assignedByInput" 
+                        class="input" 
+                        placeholder="Your name or agent ID"
+                    >
+                </div>
+
+                <button 
+                    id="submitCouponBtn" 
+                    class="btn btn-primary" 
+                    style="width: 100%; margin-top: 1.5rem; background: #10b981;"
+                >
+                    <i class="ph ph-ticket"></i> Assign Coupon
+                </button>
+            </div>
+        `;
+
+        const bottomSheet = BottomSheet({
+            title: 'Assign Coupon',
+            content: modalContent,
+            onClose: () => {}
+        });
+
+        // Handle form submission
+        setTimeout(() => {
+            const submitBtn = modalContent.querySelector('#submitCouponBtn');
+            const couponInput = modalContent.querySelector('#couponCodeInput');
+            const assignedByInput = modalContent.querySelector('#assignedByInput');
+
+            const handleSubmit = async () => {
+                const couponCode = couponInput.value.trim().toUpperCase();
+                
+                if (!couponCode) {
+                    alert('Please enter a coupon code');
+                    couponInput.focus();
+                    return;
+                }
+
+                submitBtn.disabled = true;
+                submitBtn.innerHTML = '<i class="ph ph-spinner" style="animation: spin 1s linear infinite;"></i> Assigning...';
+
+                try {
+                    const response = await safeFetch(`${API_BASE}/api/customers/${phone}/assign-coupon`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            couponCode,
+                            assignedBy: assignedByInput.value.trim() || 'Unknown'
+                        })
+                    });
+
+                    // Close modal
+                    bottomSheet.querySelector('.bottom-sheet-close').click();
+
+                    // Show success message
+                    alert(`Coupon "${couponCode}" assigned successfully to ${name}!`);
+
+                    // Reload table
+                    loadCustomerTable();
+                } catch (error) {
+                    console.error('Error assigning coupon:', error);
+                    alert('Failed to assign coupon. Please try again.');
+                    submitBtn.disabled = false;
+                    submitBtn.innerHTML = '<i class="ph ph-ticket"></i> Assign Coupon';
+                }
+            };
+
+            submitBtn.addEventListener('click', handleSubmit);
+            couponInput.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') handleSubmit();
+            });
+        }, 100);
+    }
