@@ -150,6 +150,7 @@ export function Coupons() {
             code: c.code,
             status: c.status || 'Active',
             orders: c.ordersCount ?? 0,
+            products: c.totalProducts || 0, // NEW field
             revenue: `₹${(Number(c.totalRevenue) || 0).toLocaleString()}`,
             monthRevenue: `₹${(Number(c.currentMonthRevenue) || 0).toLocaleString()}`,
             trend: 'stable',
@@ -163,8 +164,9 @@ export function Coupons() {
                     return `<span style="padding: 2px 8px; border-radius: 12px; font-size: 0.75rem; font-weight: 600; background: #ecfdf5; color: #059669">${row.status}</span>`
                 }
             },
-            { header: 'Orders (All Time)', key: 'orders' },
-            { header: 'Revenue (All Time)', key: 'revenue' },
+            { header: 'Orders', key: 'orders' },
+            { header: 'Products Sold', key: 'products' }, // NEW Column
+            { header: 'Revenue', key: 'revenue' },
             { header: 'This Month', key: 'monthRevenue' },
             {
                 header: 'Trend', key: 'trend', render: (row) => {
@@ -174,17 +176,66 @@ export function Coupons() {
                 }
             },
             { header: 'Last Used', key: 'last', render: (row) => `<span class="text-muted text-sm">${row.last}</span>` },
+            {
+                header: 'Actions', key: 'actions', render: (row) => {
+                    const isManual = row.status === 'Manual' || row.status === 'Active'; // Allow trying for active too, backend will reject if not found in manual table
+                    // Actually, let's just show it for all but maybe disable visual style if we want to be strict.
+                    // For now, consistent UI:
+                    return `
+                        <button class="btn-icon delete-coupon-btn" data-code="${row.code}" title="Delete Coupon" style="color: #ef4444; padding: 4px;">
+                            <i class="ph ph-trash"></i>
+                        </button>
+                    `;
+                }
+            }
         ];
 
         const table = Table({
             columns,
             data: tableData,
-            onRowClick: (item) => {
+            onRowClick: (item, e) => {
+                // Since this might not receive 'e' depending on Table implementation, 
+                // we'll rely on the button's stopPropagation. 
+                // But if we want to be safe and restore navigation:
                 history.pushState({}, '', `/coupons/${item.code}`);
                 window.dispatchEvent(new Event('popstate'));
             }
         });
+
+        // Wrap table in relative container to attach event delegation? 
+        // Or better: Use the fact that 'content' is the container.
         content.appendChild(table);
+
+        // Attach event listener for delete buttons
+        setTimeout(() => {
+            const deleteBtns = content.querySelectorAll('.delete-coupon-btn');
+            deleteBtns.forEach(btn => {
+                btn.addEventListener('click', async (e) => {
+                    e.stopPropagation(); // Prevent row click navigation
+                    const code = btn.dataset.code;
+
+                    if (confirm(`Are you sure you want to delete coupon "${code}"? This action cannot be undone.`)) {
+                        try {
+                            btn.disabled = true;
+                            btn.innerHTML = '<i class="ph ph-spinner" style="animation: spin 1s linear infinite;"></i>';
+
+                            await api.deleteCoupon(code);
+
+                            // Success
+                            alert(`Coupon "${code}" deleted successfully.`);
+                            // Reload data
+                            window.location.reload();
+                        } catch (err) {
+                            console.error('Delete failed:', err);
+                            alert(`Failed to delete coupon: ${err.message}`);
+                            btn.disabled = false;
+                            btn.innerHTML = '<i class="ph ph-trash"></i>';
+                        }
+                    }
+                });
+            });
+        }, 500); // Wait for table render
+
 
         // Add search functionality
         setTimeout(() => {

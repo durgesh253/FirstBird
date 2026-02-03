@@ -193,6 +193,21 @@ export const api = {
             };
         }
     },
+    async deleteCoupon(code) {
+        try {
+            const response = await fetch(`${API_URL}/coupons/manual/${code}`, {
+                method: 'DELETE'
+            });
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error || 'Failed to delete coupon');
+            }
+            return await response.json();
+        } catch (error) {
+            console.error('API Error:', error);
+            throw error;
+        }
+    },
     async getAnalytics() {
         try {
             const response = await fetch(`${API_URL}/analytics`);

@@ -379,80 +379,114 @@ router.put('/leads/:id', async (req, res) => {
     }
 });
 
-// Get coupons (High-Trust: Aggregated from Orders + Coupon Table)
+// Get coupons (Unified: DB + Manual + Live Orders)
 router.get('/coupons', async (req, res) => {
     try {
         const now = new Date();
         const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
 
-        // 1. Get all coupons from coupon table (to ensure we show all)
-        const allCoupons = await prisma.coupon.findMany({
-            select: { code: true, id: true, status: true }
+        // 1. Fetch Data sources in parallel
+        const [dbCoupons, manualCoupons, couponGroups, currentMonthGroups, allCouponOrders] = await Promise.all([
+            prisma.coupon.findMany({ select: { code: true, id: true, status: true } }),
+            prisma.manualCoupon.findMany({ where: { isActive: true } }),
+            // Live Stats (All Time)
+            prisma.order.groupBy({
+                by: ['couponCode'],
+                where: { couponCode: { not: null, notIn: COUPON_BLOCKLIST } },
+                _sum: { totalAmount: true },
+                _count: { id: true },
+                _max: { shopifyCreatedAt: true }
+            }),
+            // Live Stats (Current Month)
+            prisma.order.groupBy({
+                by: ['couponCode'],
+                where: {
+                    couponCode: { not: null, notIn: COUPON_BLOCKLIST },
+                    shopifyCreatedAt: { gte: startOfMonth }
+                },
+                _sum: { totalAmount: true }
+            }),
+            // Fetch line items to count products
+            prisma.order.findMany({
+                where: { couponCode: { not: null, notIn: COUPON_BLOCKLIST } },
+                select: { couponCode: true, lineItems: true }
+            })
+        ]);
+
+        // 2. Create Lookup Maps
+        const dbCouponMap = new Map(dbCoupons.map(c => [c.code, c]));
+        const manualCouponMap = new Map(manualCoupons.map(c => [c.code, c]));
+        const statsMap = new Map(couponGroups.map(g => [g.couponCode, g]));
+        const monthStatsMap = new Map(currentMonthGroups.map(g => [g.couponCode, g]));
+
+        // Calculate Product Counts
+        const productCountMap = {};
+        allCouponOrders.forEach(o => {
+            if (o.lineItems) {
+                // Assuming comma-separated product names
+                const count = o.lineItems.split(',').filter(i => i.trim().length > 0).length;
+                productCountMap[o.couponCode] = (productCountMap[o.couponCode] || 0) + count;
+            }
         });
 
-        // 2. Get coupon order stats (All Time)
-        // Note: Relaxed filter to show all orders, not just paid ones, per user request for visibility
-        const couponGroups = await prisma.order.groupBy({
-            by: ['couponCode'],
-            where: {
-                couponCode: { not: null, notIn: COUPON_BLOCKLIST }
-                // Removed financialStatus filter to show ALL attempts
-            },
-            _sum: { totalAmount: true },
-            _count: { id: true },
-            _max: { shopifyCreatedAt: true }
-        });
+        // 3. Identify ALL Unique Coupon Codes
+        const allCodes = new Set([
+            ...dbCoupons.map(c => c.code),
+            ...manualCoupons.map(c => c.code),
+            ...couponGroups.map(g => g.couponCode)
+        ]);
 
-        // 3. Get Current Month Stats (Optimized: Single GroupBy instead of Loop)
-        const currentMonthGroups = await prisma.order.groupBy({
-            by: ['couponCode'],
-            where: {
-                couponCode: { not: null, notIn: COUPON_BLOCKLIST },
-                shopifyCreatedAt: { gte: startOfMonth }
-                // Removed financialStatus filter
-            },
-            _sum: { totalAmount: true }
-        });
+        // 4. Build Unified Result
+        const unifiedCoupons = Array.from(allCodes).map(code => {
+            const dbC = dbCouponMap.get(code);
+            const manC = manualCouponMap.get(code);
+            const stats = statsMap.get(code);
+            const monthStats = monthStatsMap.get(code);
 
-        const couponMap = new Map(couponGroups.map(g => [g.couponCode, g]));
-        const currentMonthMap = new Map(currentMonthGroups.map(g => [g.couponCode, g]));
+            // Determine Status & Metadata
+            let status = 'Active';
+            let source = 'shopify';
+            let createdBy = null;
 
-        // 4. Merge Data in Memory
-        const result = allCoupons.map(coupon => {
-            const group = couponMap.get(coupon.code);
-            const currentMonthGroup = currentMonthMap.get(coupon.code);
+            if (manC) {
+                status = 'Manual';
+                source = 'manual';
+                createdBy = manC.createdBy;
+            } else if (dbC) {
+                status = dbC.status;
+            } else {
+                // If found in orders but not in tables, it's an "Implied" or "Auto-detected" coupon
+                status = 'Active';
+            }
+
+            // Metrics: Prefer live order stats, fall back to manual coupon cached stats if no orders found (unlikely if loop based on orders)
+            // Note: manualCoupons store 'totalOrders' but live stats are better.
+            const ordersCount = stats ? (stats._count.id || 0) : (manC?.totalOrders || 0);
+            const totalRevenue = stats ? parseFloat(stats._sum.totalAmount || 0) : parseFloat(manC?.totalRevenue || 0);
+            const currentMonthRevenue = monthStats ? parseFloat(monthStats._sum.totalAmount || 0) : 0;
+            const lastUsed = stats ? stats._max.shopifyCreatedAt : (manC?.lastUsedAt || null);
+            const totalProducts = productCountMap[code] || 0;
+
+            const aov = ordersCount > 0 ? parseFloat((totalRevenue / ordersCount).toFixed(2)) : 0;
 
             return {
-                code: coupon.code,
-                status: coupon.status || 'Active',
-                ordersCount: group ? (group._count.id || 0) : 0,
-                totalRevenue: group ? parseFloat(group._sum.totalAmount || 0) : 0,
-                currentMonthRevenue: currentMonthGroup ? parseFloat(currentMonthGroup._sum.totalAmount || 0) : 0,
-                lastUsed: group ? group._max.shopifyCreatedAt : null,
-                aov: group && group._count.id > 0 ? parseFloat((parseFloat(group._sum.totalAmount || 0) / group._count.id).toFixed(2)) : 0
+                code,
+                status,
+                ordersCount,
+                totalRevenue,
+                currentMonthRevenue,
+                lastUsed,
+                aov,
+                source,
+                createdBy,
+                totalProducts
             };
         });
 
-        // Get manual coupons and merge them
-        const manualCoupons = await prisma.manualCoupon.findMany({
-            where: { isActive: true }
-        });
+        // Sort by Revenue Descending
+        unifiedCoupons.sort((a, b) => b.totalRevenue - a.totalRevenue);
 
-        const manualCouponsFormatted = manualCoupons.map(mc => ({
-            code: mc.code,
-            status: 'Manual',
-            ordersCount: mc.totalOrders,
-            totalRevenue: parseFloat(mc.totalRevenue),
-            currentMonthRevenue: 0, // Manual coupons don't track monthly separately in schema yet, could be added later
-            lastUsed: mc.lastUsedAt,
-            aov: mc.totalOrders > 0 ? parseFloat((parseFloat(mc.totalRevenue) / mc.totalOrders).toFixed(2)) : 0,
-            source: 'manual',
-            createdBy: mc.createdBy
-        }));
-
-        const allCouponsData = [...result, ...manualCouponsFormatted];
-
-        res.json(allCouponsData);
+        res.json(unifiedCoupons);
     } catch (err) {
         console.error('[GET /coupons] Error:', err);
         res.status(500).json({ error: err.message });
